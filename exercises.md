@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | Câu trả lời từ chối an toàn hoặc diễn đạt thận trọng nên ít từ trùng context, nhưng không tạo claim mới. | Có claim về chính sách/sản phẩm không được context hỗ trợ, đặc biệt claim an toàn hoặc tài chính. | Đối chiếu từng claim với evidence, chặn claim không có nguồn và sửa prompt/context. |
+| Answer Relevance | Câu hỏi ngoài phạm vi được trả lời bằng một lời từ chối ngắn, an toàn. | Câu hỏi trong phạm vi nhưng câu trả lời lạc đề hoặc không thực hiện yêu cầu chính. | Sửa intent, prompt và kiểm tra câu trả lời có trả lời trực tiếp câu hỏi không. |
+| Context Recall | Thiếu một chi tiết phụ nhưng các điều kiện cần để trả lời vẫn có trong context. | Thiếu điều kiện, ngày tháng hay ngoại lệ quan trọng nên không thể trả lời đúng. | Mở rộng truy vấn, tăng coverage hoặc điều chỉnh chunking/retriever. |
+| Context Precision | Có vài chunk dư nhưng evidence đúng vẫn ở đầu và còn trong context window. | Nhiễu nhiều, evidence quan trọng bị đẩy xuống hoặc bị cắt khỏi context window. | Lọc, rerank và giảm số chunk không liên quan. |
+| Completeness | Bỏ một chi tiết tùy chọn nhưng có đủ hành động và điều kiện chính. | Bỏ điều kiện bắt buộc, ngoại lệ hoặc bước hành động khiến người dùng làm sai. | Bổ sung evidence, yêu cầu prompt kiểm tra các điều kiện bắt buộc trước khi trả lời. |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -46,15 +46,15 @@ Ba bias thường gặp:
 
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Chọn các cặp câu trả lời A/B cho cùng một câu hỏi, ẩn tên model và chấm nhiều lần. Condition 1 luôn đưa A trước, B sau; condition 2 đảo thành B trước, A sau. Giữ nguyên rubric và nội dung, chỉ đổi vị trí. So sánh tỉ lệ thắng/điểm trung bình của từng câu trả lời giữa hai condition; nếu A hoặc B được ưu ái khi đứng trước một cách có hệ thống thì judge có position bias. Có thể random hóa thứ tự cho từng mẫu để giảm bias khi chấm thật.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Rubric chỉ cho điểm các facts cần thiết, điều kiện, ngoại lệ và bước hành động đúng; không có tiêu chí “dài hơn là tốt hơn”. Nêu rõ câu trả lời phải trực tiếp, không lặp lại, và phạt thông tin ngoài câu hỏi hoặc claim không có evidence. Dùng giới hạn độ dài hợp lý hoặc yêu cầu trả lời theo các ý bắt buộc giúp một câu ngắn nhưng đủ ý nhận điểm cao.
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Điểm của LLM judge là một ước lượng, có thể mang bias hoặc hiểu rubric khác người. So sánh với nhãn do người chấm độc lập tạo ra cho một tập mẫu giúp phát hiện sai lệch có hệ thống, điều chỉnh rubric/threshold và biết lúc nào điểm tự động không đáng tin. Human labels cũng là chuẩn tham chiếu cho các lỗi safety, policy và câu mơ hồ khó tự động hóa.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +62,13 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.70 | Claim không có evidence có thể tạo hướng dẫn sai; dưới ngưỡng này phải chặn deploy và điều tra. |
+| Answer Relevance | 0.60 | Dưới mức này phần lớn người dùng không nhận được câu trả lời trực tiếp cho ý định của họ. |
+| Completeness | 0.70 | Thiếu điều kiện/ngoại lệ quan trọng có thể làm quy trình hỗ trợ sai dù câu trả lời nghe hợp lý. |
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Dùng offline evaluation trên golden dataset ở mỗi pull request, thay đổi prompt/model/retriever và làm quality gate trước deploy. Dùng online evaluation sau deploy để theo dõi dữ liệu thật, drift, latency và các mẫu phản hồi đã ẩn danh. Dùng human review cho lỗi safety/privacy, câu mơ hồ hoặc tác động cao, mẫu judge không chắc chắn, và mọi hồi quy đáng kể trước khi quyết định phát hành.
 
 ---
 
@@ -269,19 +269,19 @@ verbosity bias và self-preference bằng cách nào?
 Chỉ làm sau khi hoàn thành 3.1–3.3. Chọn hai framework trong RAGAS, DeepEval
 và TruLens; chạy hoặc thiết kế một so sánh có cùng input dataset.
 
-| Tiêu chí | Framework 1: ____ | Framework 2: ____ |
+| Tiêu chí | Framework 1: RAGAS | Framework 2: DeepEval |
 |---|---|---|
-| Setup complexity | | |
-| Metrics available | | |
-| CI/CD integration | | |
-| Kết quả trên cùng dataset | | |
-| Insight rút ra | | |
+| Setup complexity | Cần dataset có question, answer, contexts/reference và cấu hình judge/embeddings theo metric. | Tạo test case và các metric/assertion Python; thuận tiện khi test đã ở trong codebase. |
+| Metrics available | Faithfulness, answer relevancy, context recall và context precision, phù hợp để tách generation/retrieval. | Faithfulness, answer relevancy, G-Eval và các assertion/test-oriented metrics; linh hoạt cho tiêu chí tùy chỉnh. |
+| CI/CD integration | Có thể chạy batch benchmark rồi đặt threshold/regression gate trong CI. | Có thể chạy như test suite trong CI và fail build khi metric/assertion không đạt. |
+| Kết quả trên cùng dataset | Thiết kế dùng 20 QA và `artifacts/actual_answers.json`; chưa chạy thư viện RAGAS chính thức nên không ghi điểm giả. | Dùng đúng 20 QA, câu trả lời và contexts như cột RAGAS; chưa chạy thư viện DeepEval chính thức nên không ghi điểm giả. |
+| Insight rút ra | Làm rõ chất lượng retrieval qua recall/precision tách khỏi answer metrics. | Phù hợp biến rubric thành kiểm thử có pass/fail rõ ràng trong code. |
 
 - Scores có nhất quán không?
 - Framework nào strict hơn và vì sao?
 - Hai framework có tìm ra cùng failure cases không?
 
-> *Phân tích:*
+> *Phân tích:* Hai framework không nhất thiết cho score giống nhau vì prompt judge, cách chuẩn hóa và định nghĩa metric khác nhau. Với cùng dataset, RAGAS thường cho insight rõ hơn về retrieval; DeepEval thường nghiêm hơn khi assertion/rubric được đặt chặt. Không được kết luận framework nào strict hơn hay cùng failure case chỉ từ tên framework: cần chạy cả hai với cùng 20 input, cố định model judge và sau đó so sánh theo từng ID. Thiết kế trên bảo đảm phép so sánh công bằng; benchmark hiện có chỉ dùng evaluator lexical tự viết nên không được xem là kết quả chính thức của RAGAS hoặc DeepEval.
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus +5)
 
@@ -296,20 +296,20 @@ thay đổi Context Recall hay không.
 
 | ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
 |---|---:|---:|---:|---:|---:|
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| **Avg** | | | | | |
+| E01 | 0.938 | 0.938 | 0.917 | 1.000 | +0.083 |
+| E02 | 1.000 | 1.000 | 1.000 | 1.000 | +0.000 |
+| M01 | 0.636 | 0.636 | 0.887 | 0.950 | +0.062 |
+| M07 | 0.548 | 0.548 | 0.533 | 0.639 | +0.106 |
+| A03 | 0.389 | 0.389 | 0.950 | 0.950 | +0.000 |
+| **Avg** | **0.702** | **0.702** | **0.857** | **0.908** | **+0.050** |
 
 **Tại sao Recall dự kiến không đổi?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Recall đo evidence liên quan có mặt trong toàn bộ tập chunks đã lấy. Reranker ở đây chỉ đổi thứ tự của đúng tập chunks đó, không thêm hay xóa chunk, nên hợp các token/evidence vẫn y hệt. Vì Context Precision là rank-aware, nó có thể tăng khi chunk liên quan được đưa lên đầu.
 
 **Khi nào reranking không đủ và cần sửa retriever/query/chunking?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Reranking không thể tìm lại evidence chưa được retrieve, nên không đủ khi recall thấp, query mơ hồ hoặc index không chứa đoạn phù hợp. Cần sửa retriever/query expansion khi top-k bỏ sót tài liệu; sửa chunking khi một điều kiện bị cắt sang chunk khác hoặc chunk quá dài/nhiễu; thêm metadata filter khi câu hỏi cần đúng phiên bản policy, sản phẩm hay ngày tháng. Nếu tập chunks đã đúng mà câu trả lời vẫn sai, cần sửa prompt/generation thay vì chỉ rerank.
 
 ---
 
@@ -323,11 +323,11 @@ Hoàn thành `reflection.md` bằng kết quả thật từ Exercise 3.2.
 
 Hoàn thành kiểm tra cuối trong khoảng 11:50–12:00.
 
-- [ ] Tất cả required tests pass.
-- [ ] `golden_dataset.json` validate thành công.
-- [ ] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
-- [ ] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
-- [ ] Exercise 3.3 có rubric 1–5 và bias controls.
-- [ ] `reflection.md` có ba failure analyses và regression strategy.
-- [ ] Đã copy `template.py` thành `solution/solution.py`.
-- [ ] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
+- [x] Tất cả required tests pass.
+- [x] `golden_dataset.json` validate thành công.
+- [x] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
+- [x] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
+- [x] Exercise 3.3 có rubric 1–5 và bias controls.
+- [x] `reflection.md` có ba failure analyses và regression strategy.
+- [x] Đã copy `template.py` thành `solution/solution.py`.
+- [x] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
