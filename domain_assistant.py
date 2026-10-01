@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError as GeminiAPIError
 from openai import OpenAI, OpenAIError
 
 load_dotenv(Path(__file__).resolve().with_name(".env"))
@@ -266,6 +269,62 @@ class OpenAIGenerator:
         return answer
 
 
+class GeminiGenerator:
+    """Generate answers with Google's current ``google-genai`` SDK."""
+
+    def __init__(self, max_output_tokens: int = 300) -> None:
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        configured_model = os.getenv(
+            "GEMINI_MODEL", "gemini-3.1-flash-lite"
+        ).strip()
+        # Gemini retired this formerly recommended model for new API users.
+        self.model = (
+            "gemini-3.1-flash-lite"
+            if configured_model == "gemini-2.5-flash"
+            else configured_model
+        )
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is missing from .env")
+        if not self.model:
+            raise RuntimeError("GEMINI_MODEL is missing from .env")
+        self.client = genai.Client(api_key=api_key)
+        self.max_output_tokens = max_output_tokens
+        # Flash-Lite free/low-tier quotas can be rate limited; keep calls paced.
+        self.min_request_interval = float(
+            os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SECONDS", "7")
+        )
+        self._last_request_at: float | None = None
+
+    def generate(self, prompt: str) -> str:
+        if self._last_request_at is not None:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < self.min_request_interval:
+                time.sleep(self.min_request_interval - elapsed)
+        self._last_request_at = time.monotonic()
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                max_output_tokens=self.max_output_tokens,
+            ),
+        )
+        answer = (response.text or "").strip()
+        if not answer:
+            raise RuntimeError("Gemini returned an empty answer")
+        return answer
+
+
+def _default_generator() -> TextGenerator:
+    """Choose the model provider from ``LLM_PROVIDER`` (Gemini by default)."""
+    provider = os.getenv("LLM_PROVIDER", "gemini").strip().casefold()
+    if provider == "gemini":
+        return GeminiGenerator()
+    if provider == "openai":
+        return OpenAIGenerator()
+    raise RuntimeError("LLM_PROVIDER must be either 'gemini' or 'openai'")
+
+
 @dataclass(frozen=True)
 class DomainResponse:
     question: str
@@ -299,7 +358,7 @@ class DomainAssistant:
         return cls(
             corpus_id,
             BM25Retriever(chunks),
-            generator if generator is not None else OpenAIGenerator(),
+            generator if generator is not None else _default_generator(),
             top_k,
         )
 
@@ -380,6 +439,7 @@ def generate_actual_answers(
     generator: TextGenerator | None = None,
     top_k: int = 5,
     progress: ProgressCallback | None = None,
+    question_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Generate the auditable actual-answer artifact for all dataset questions."""
 
@@ -390,6 +450,14 @@ def generate_actual_answers(
     dataset_file = Path(dataset_path).expanduser().resolve()
     notify(f"Loading golden questions: {dataset_file}")
     dataset_corpus_id, questions = _load_questions(dataset_file)
+    if question_ids is not None:
+        available_ids = {item["id"] for item in questions}
+        unknown_ids = question_ids - available_ids
+        if unknown_ids:
+            raise ValueError("Unknown question IDs: " + ", ".join(sorted(unknown_ids)))
+        questions = [item for item in questions if item["id"] in question_ids]
+        if not questions:
+            raise ValueError("No question IDs were selected")
     notify(f"Loading and indexing corpus: {Path(corpus_dir).expanduser().resolve()}")
     assistant = DomainAssistant.from_corpus(corpus_dir, generator, top_k)
     if assistant.corpus_id != dataset_corpus_id:
@@ -489,26 +557,51 @@ def parse_args() -> argparse.Namespace:
         help="Output artifact (default: artifacts/actual_answers.json)",
     )
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--ids",
+        default="",
+        help="Comma-separated QA IDs to generate (for example: E01,E02,E03,E04,E05)",
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append this batch to an existing output artifact without duplicate IDs",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
+        selected_ids = {item.strip() for item in args.ids.split(",") if item.strip()}
         artifact = generate_actual_answers(
             args.dataset,
             args.corpus_dir,
             top_k=args.top_k,
             progress=lambda message: print(message, flush=True),
+            question_ids=selected_ids or None,
         )
         output = args.output.expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
+        if args.append and output.exists():
+            existing = json.loads(output.read_text(encoding="utf-8"))
+            if existing.get("corpus_id") != artifact["corpus_id"]:
+                raise ValueError("Existing output uses a different corpus_id")
+            existing_answers = existing.get("answers")
+            if not isinstance(existing_answers, list):
+                raise ValueError("Existing output has an invalid answers list")
+            existing_ids = {item.get("id") for item in existing_answers if isinstance(item, dict)}
+            new_ids = {item["id"] for item in artifact["answers"]}
+            duplicates = existing_ids & new_ids
+            if duplicates:
+                raise ValueError("Batch IDs already exist: " + ", ".join(sorted(duplicates)))
+            artifact["answers"] = [*existing_answers, *artifact["answers"]]
         print(f"Saving actual-answer artifact: {output}", flush=True)
         output.write_text(
             json.dumps(artifact, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    except (OSError, OpenAIError, TypeError, ValueError, RuntimeError) as exc:
+    except (OSError, OpenAIError, GeminiAPIError, TypeError, ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 2
     print(f"Generated {len(artifact['answers'])} actual answers: {output}")
